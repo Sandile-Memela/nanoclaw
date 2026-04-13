@@ -357,7 +357,9 @@ export class ThriveChannel implements Channel {
       operation: 'receive',
       chat: 'Omega',
       sender: 'Omega',
-      message: JSON.stringify(thriveMsg).replaceAll('"', "'"),
+      message: JSON.stringify(thriveMsg)
+        .replaceAll("'", '~~')
+        .replaceAll('"', "'"),
       userId: this.cfg.omegaUserId,
       sessionId: this.cfg.omegaSessionId,
       identifier: OMEGA_ID,
@@ -398,7 +400,9 @@ export class ThriveChannel implements Channel {
         operation: 'receive',
         chat: 'Omega',
         sender: 'Omega',
-        message: JSON.stringify(thriveMsg).replaceAll('"', "'"),
+        message: JSON.stringify(thriveMsg)
+          .replaceAll("'", '~~')
+          .replaceAll('"', "'"),
         userId: this.cfg.omegaUserId,
         sessionId: this.cfg.omegaSessionId,
         identifier: OMEGA_ID,
