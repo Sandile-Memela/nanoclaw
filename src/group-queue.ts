@@ -143,23 +143,35 @@ export class GroupQueue {
 
   /**
    * Mark the container as idle-waiting (finished work, waiting for IPC input).
-   * If tasks are pending, preempt the idle container immediately.
+   * If tasks or messages are pending, preempt the idle container immediately
+   * so drainGroup runs and picks them up without waiting for the idle timeout.
    */
   notifyIdle(groupJid: string): void {
     const state = this.getGroup(groupJid);
     state.idleWaiting = true;
-    if (state.pendingTasks.length > 0) {
+    if (state.pendingTasks.length > 0 || state.pendingMessages) {
       this.closeStdin(groupJid);
     }
   }
 
   /**
    * Send a follow-up message to the active container via IPC file.
-   * Returns true if the message was written, false if no active container.
+   * Returns true if the message was written, false if no active container or
+   * the container is currently mid-query (not yet idle).
+   * Callers must fall back to enqueueMessageCheck when this returns false.
    */
   sendMessage(groupJid: string, text: string): boolean {
     const state = this.getGroup(groupJid);
-    if (!state.active || !state.groupFolder || state.isTaskContainer)
+    // Only pipe to the container when it is explicitly idle-waiting (between
+    // queries). Piping mid-query causes pollIpcDuringQuery to accumulate
+    // multiple messages that are processed as inline turns — the final SDK
+    // result event then comes out null and no response reaches the user.
+    if (
+      !state.active ||
+      !state.groupFolder ||
+      state.isTaskContainer ||
+      !state.idleWaiting
+    )
       return false;
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
 
