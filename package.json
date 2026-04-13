@@ -26,7 +26,7 @@
     "amqplib": "^1.0.3",
     "better-sqlite3": "11.10.0",
     "cron-parser": "5.5.0",
-    "node-appwrite": "^23.1.0",
+    "node-appwrite": "^14.2.0",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0"
   },
