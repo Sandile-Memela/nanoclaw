@@ -9,5 +9,8 @@
 
 // telegram
 
+// thrive
+import './thrive.js';
+
 // whatsapp
 import './whatsapp.js';
