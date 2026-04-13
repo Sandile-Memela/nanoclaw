@@ -184,7 +184,9 @@ export class ThriveChannel implements Channel {
   }
 
   private async connectInternal(): Promise<void> {
-    this.conn = await amqp.connect(this.cfg.rabbitmqUrl);
+    const url = new URL(this.cfg.rabbitmqUrl);
+    url.searchParams.set('heartbeat', '60');
+    this.conn = await amqp.connect(url.toString());
     this.ch = await this.conn.createChannel();
 
     this.conn.on('error', (err: unknown) => {
