@@ -396,6 +396,13 @@ export class ThriveChannel implements Channel {
    * jid format: "identifier-identifierType-identifierTeamId@thrive"
    */
   async sendMessage(jid: string, text: string): Promise<void> {
+    // Cancel any active typing indicator before sending the reply
+    const timer = this.typingTimers.get(jid);
+    if (timer) {
+      clearInterval(timer);
+      this.typingTimers.delete(jid);
+    }
+
     const { id, type, teamId } = fromJid(jid);
 
     const thriveMsg: ThriveMessage = {
