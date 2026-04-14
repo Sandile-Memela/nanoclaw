@@ -378,7 +378,10 @@ export class ThriveChannel implements Channel {
       });
     };
 
-    // Fire immediately, then repeat every 3 seconds while agent is processing
+    // Fire immediately, then repeat every 3 seconds while agent is processing.
+    // Safety valve: auto-cancel after 5 minutes to prevent runaway indicators
+    // if the agent container hangs and setTyping(false) is never called.
+    const MAX_TYPING_MS = 5 * 60 * 1000;
     await sendTypingReceipt();
     const timer = setInterval(() => {
       sendTypingReceipt().catch((err) =>
@@ -386,6 +389,17 @@ export class ThriveChannel implements Channel {
       );
     }, 3000);
     this.typingTimers.set(jid, timer);
+    setTimeout(() => {
+      const t = this.typingTimers.get(jid);
+      if (t === timer) {
+        clearInterval(timer);
+        this.typingTimers.delete(jid);
+        logger.warn(
+          { jid },
+          'Thrive: typing indicator auto-cancelled after max duration',
+        );
+      }
+    }, MAX_TYPING_MS);
   }
 
   /**
@@ -485,6 +499,7 @@ export class ThriveChannel implements Channel {
   ): Promise<void> {
     const MAX_ATTEMPTS = 3;
     const RETRY_DELAY_MS = 2000;
+    const REQUEST_TIMEOUT_MS = 30_000;
 
     let lastErr: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -495,11 +510,20 @@ export class ThriveChannel implements Channel {
           .setKey(this.cfg.appwriteApiKey);
 
         const functions = new Functions(client);
-        await functions.createExecution(
-          this.cfg.appwriteFunctionId,
-          JSON.stringify(payload),
-          false, // synchronous
+        const timeout = new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Appwrite function invocation timed out')),
+            REQUEST_TIMEOUT_MS,
+          ),
         );
+        await Promise.race([
+          functions.createExecution(
+            this.cfg.appwriteFunctionId,
+            JSON.stringify(payload),
+            false, // synchronous
+          ),
+          timeout,
+        ]);
         logger.debug(
           {
             operation: payload.operation,
