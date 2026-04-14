@@ -94,6 +94,22 @@ interface AppwriteFunctionPayload {
 // ── JID helpers ───────────────────────────────────────────────────────────────
 
 // JID format used inside NanoClaw: "id-type-teamId@thrive"
+/** Split text into chunks of at most maxLen characters, breaking on whitespace. */
+function chunkText(text: string, maxLen: number): string[] {
+  if (text.length <= maxLen) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxLen) {
+    let cut = remaining.lastIndexOf('\n', maxLen);
+    if (cut <= 0) cut = remaining.lastIndexOf(' ', maxLen);
+    if (cut <= 0) cut = maxLen;
+    chunks.push(remaining.slice(0, cut).trimEnd());
+    remaining = remaining.slice(cut).trimStart();
+  }
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
+}
+
 function toJid(id: string, type: string, teamId: string): string {
   return `${id}-${type}-${teamId}@thrive`;
 }
@@ -491,39 +507,41 @@ export class ThriveChannel implements Channel {
    */
   async sendMessage(jid: string, text: string): Promise<void> {
     const { id, type, teamId } = fromJid(jid);
-
-    const thriveMsg: ThriveMessage = {
-      id: crypto.randomUUID().replace(/-/g, '').slice(0, 20),
-      source_id: OMEGA_ID,
-      source_type: OMEGA_TYPE,
-      source_team_id: OMEGA_TEAM_ID,
-      destination_id: id,
-      destination_type: type,
-      destination_team_id: teamId,
-      creation_date: new Date().toISOString(),
-      message_status: 'direct',
-      message_type: 'text',
-      message: text,
-    };
-
-    const payload: AppwriteFunctionPayload = {
-      operation: 'receive',
-      chat: 'Omega',
-      sender: 'Omega',
-      message: JSON.stringify(thriveMsg)
-        .replaceAll("'", '~~')
-        .replaceAll('"', "'"),
-      userId: this.cfg.omegaUserId,
-      sessionId: this.cfg.omegaSessionId,
-      identifier: OMEGA_ID,
-      identifierType: OMEGA_TYPE,
-      identifierTeamId: OMEGA_TEAM_ID,
-    };
+    const chunks = chunkText(text, 900);
 
     // Clear the timer synchronously before awaiting, so the interval cannot
     // fire during the yield and queue a typing receipt after the message.
     this.clearTypingTimer(jid);
-    await this.invokeFunction(payload);
+
+    for (const chunk of chunks) {
+      const thriveMsg: ThriveMessage = {
+        id: crypto.randomUUID().replace(/-/g, '').slice(0, 20),
+        source_id: OMEGA_ID,
+        source_type: OMEGA_TYPE,
+        source_team_id: OMEGA_TEAM_ID,
+        destination_id: id,
+        destination_type: type,
+        destination_team_id: teamId,
+        creation_date: new Date().toISOString(),
+        message_status: 'direct',
+        message_type: 'text',
+        message: chunk,
+      };
+
+      await this.invokeFunction({
+        operation: 'receive',
+        chat: 'Omega',
+        sender: 'Omega',
+        message: JSON.stringify(thriveMsg)
+          .replaceAll("'", '~~')
+          .replaceAll('"', "'"),
+        userId: this.cfg.omegaUserId,
+        sessionId: this.cfg.omegaSessionId,
+        identifier: OMEGA_ID,
+        identifierType: OMEGA_TYPE,
+        identifierTeamId: OMEGA_TEAM_ID,
+      });
+    }
   }
 
   /**
