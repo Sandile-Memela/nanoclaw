@@ -406,6 +406,14 @@ export class ThriveChannel implements Channel {
     });
   }
 
+  private clearTypingTimer(jid: string): void {
+    const timer = this.typingTimers.get(jid);
+    if (timer) {
+      clearInterval(timer);
+      this.typingTimers.delete(jid);
+    }
+  }
+
   /**
    * Send a typing indicator to a user. Mirrors the receipt pattern from the
    * iOS client: a "receipt" operation with message_status "type". Only fires
@@ -415,11 +423,7 @@ export class ThriveChannel implements Channel {
    */
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     if (!isTyping) {
-      const timer = this.typingTimers.get(jid);
-      if (timer) {
-        clearInterval(timer);
-        this.typingTimers.delete(jid);
-      }
+      this.clearTypingTimer(jid);
       return;
     }
 
@@ -516,14 +520,17 @@ export class ThriveChannel implements Channel {
       identifierTeamId: OMEGA_TEAM_ID,
     };
 
-    await this.invokeFunction(payload);
+    try {
+      await this.invokeFunction(payload);
+    } catch (err) {
+      // All retries exhausted — stop the typing indicator so it doesn't run
+      // forever, then re-throw so the caller knows the send failed.
+      this.clearTypingTimer(jid);
+      throw err;
+    }
 
     // Cancel the typing indicator only once the message lands successfully
-    const timer = this.typingTimers.get(jid);
-    if (timer) {
-      clearInterval(timer);
-      this.typingTimers.delete(jid);
-    }
+    this.clearTypingTimer(jid);
   }
 
   /**
