@@ -75,7 +75,7 @@ export interface ThriveMessage {
   creation_date: string;
   message_status: ThriveMessageStatus;
   message_type: ThriveMessageType;
-  message: string;
+  message: string | string[];
 }
 
 /** Appwrite function invocation payload for the RabbitMQ function. */
@@ -321,12 +321,52 @@ export class ThriveChannel implements Channel {
       chat_jid: jid,
       sender: `${msg.source_id}-${msg.source_type}-${msg.source_team_id}`,
       sender_name: displayName,
-      content: msg.message,
+      content: msg.message as string,
       timestamp: new Date().toISOString(),
       is_from_me: false,
     };
 
     this.opts.onMessage(jid, newMessage);
+  }
+
+  /**
+   * Send a typing indicator to a user. Mirrors the receipt pattern from the
+   * iOS client: a "receipt" operation with message_status "type". Only fires
+   * when Omega starts typing — stopping is implicit once the real message lands.
+   *
+   * jid format: "identifier-identifierType-identifierTeamId@thrive"
+   */
+  async setTyping(jid: string, isTyping: boolean): Promise<void> {
+    if (!isTyping) return; // receipt clears itself when the real message arrives
+
+    const { id, type, teamId } = fromJid(jid);
+
+    const typingMsg: ThriveMessage = {
+      id: crypto.randomUUID().replace(/-/g, '').slice(0, 20),
+      source_id: OMEGA_ID,
+      source_type: OMEGA_TYPE,
+      source_team_id: OMEGA_TEAM_ID,
+      destination_id: id,
+      destination_type: type,
+      destination_team_id: teamId,
+      creation_date: new Date().toISOString(),
+      message_status: 'type',
+      message_type: 'text',
+      message: [],
+    };
+
+    await this.invokeFunction({
+      operation: 'receipt',
+      sender: 'Omega',
+      message: JSON.stringify(typingMsg)
+        .replaceAll("'", '~~')
+        .replaceAll('"', "'"),
+      userId: this.cfg.omegaUserId,
+      sessionId: this.cfg.omegaSessionId,
+      identifier: OMEGA_ID,
+      identifierType: OMEGA_TYPE,
+      identifierTeamId: OMEGA_TEAM_ID,
+    });
   }
 
   /**
