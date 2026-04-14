@@ -43,7 +43,8 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('appwrite ver:', d.get\\('description',''\\)\\); print\\('keywords:', d.get\\('keywords',[]\\)\\); print\\('readme excerpt:', d.get\\('readme',''\\)[:300]\\)\")",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('gitHead',''\\)\\)\")",
       "Bash(kill %1)",
-      "Bash(grep -r \"setTimeout\\\\|setResponseTimeout\\\\|timeout\" node_modules/node-appwrite/src/client.*)"
+      "Bash(grep -r \"setTimeout\\\\|setResponseTimeout\\\\|timeout\" node_modules/node-appwrite/src/client.*)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d.get\\('dependencies',{}\\).items\\(\\) if 'amqp' in k or 'appwrite' in k}, indent=2\\)\\)\")"
     ]
   }
 }
