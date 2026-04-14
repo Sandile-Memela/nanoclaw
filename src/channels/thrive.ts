@@ -582,7 +582,6 @@ export class ThriveChannel implements Channel {
   ): Promise<void> {
     const MAX_ATTEMPTS = 3;
     const RETRY_DELAY_MS = 2000;
-    const REQUEST_TIMEOUT_MS = 30_000;
 
     let lastErr: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -593,20 +592,11 @@ export class ThriveChannel implements Channel {
           .setKey(this.cfg.appwriteApiKey);
 
         const functions = new Functions(client);
-        const timeout = new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Appwrite function invocation timed out')),
-            REQUEST_TIMEOUT_MS,
-          ),
+        await functions.createExecution(
+          this.cfg.appwriteFunctionId,
+          JSON.stringify(payload),
+          true, // async — fire and forget
         );
-        await Promise.race([
-          functions.createExecution(
-            this.cfg.appwriteFunctionId,
-            JSON.stringify(payload),
-            false, // synchronous
-          ),
-          timeout,
-        ]);
         logger.debug(
           {
             operation: payload.operation,
