@@ -329,9 +329,12 @@ export class ThriveChannel implements Channel {
 
     this.opts.onMessage(jid, newMessage);
 
-    // Fire-and-forget delivery receipt back to the sender
+    // Fire-and-forget delivery + read receipts back to the sender
     this.sendDeliveryReceipt(msg).catch((err) =>
       logger.warn({ err, id: msg.id }, 'Thrive: delivery receipt failed'),
+    );
+    this.sendReadReceipt(msg).catch((err) =>
+      logger.warn({ err, id: msg.id }, 'Thrive: read receipt failed'),
     );
   }
 
@@ -351,6 +354,40 @@ export class ThriveChannel implements Channel {
       destination_team_id: msg.source_team_id,
       creation_date: new Date().toISOString(),
       message_status: 'deliver',
+      message_type: 'text',
+      message: [msg.id],
+    };
+
+    await this.invokeFunction({
+      operation: 'receipt',
+      sender: 'Omega',
+      message: JSON.stringify(receiptMsg)
+        .replaceAll("'", '~~')
+        .replaceAll('"', "'"),
+      userId: this.cfg.omegaUserId,
+      sessionId: this.cfg.omegaSessionId,
+      identifier: OMEGA_ID,
+      identifierType: OMEGA_TYPE,
+      identifierTeamId: OMEGA_TEAM_ID,
+    });
+  }
+
+  /**
+   * Send a "read" receipt to confirm Omega has read the user's message.
+   * Sent immediately on receipt, before processing begins.
+   * source is Omega (the reader), destination is the user, message is [original id].
+   */
+  private async sendReadReceipt(msg: ThriveMessage): Promise<void> {
+    const receiptMsg: ThriveMessage = {
+      id: crypto.randomUUID().replace(/-/g, '').slice(0, 20),
+      source_id: OMEGA_ID,
+      source_type: OMEGA_TYPE,
+      source_team_id: OMEGA_TEAM_ID,
+      destination_id: msg.source_id,
+      destination_type: msg.source_type,
+      destination_team_id: msg.source_team_id,
+      creation_date: new Date().toISOString(),
+      message_status: 'read',
       message_type: 'text',
       message: [msg.id],
     };
