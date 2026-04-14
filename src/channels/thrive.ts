@@ -170,6 +170,7 @@ export class ThriveChannel implements Channel {
   private ch?: any;
   private connected = false;
   private reconnecting = false;
+  private typingTimers = new Map<string, ReturnType<typeof setInterval>>();
 
   private readonly cfg: ThriveChannelConfig;
   private readonly opts: ChannelOpts;
@@ -337,36 +338,54 @@ export class ThriveChannel implements Channel {
    * jid format: "identifier-identifierType-identifierTeamId@thrive"
    */
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
-    if (!isTyping) return; // receipt clears itself when the real message arrives
+    if (!isTyping) {
+      const timer = this.typingTimers.get(jid);
+      if (timer) {
+        clearInterval(timer);
+        this.typingTimers.delete(jid);
+      }
+      return;
+    }
 
     const { id, type, teamId } = fromJid(jid);
 
-    const typingMsg: ThriveMessage = {
-      id: crypto.randomUUID().replace(/-/g, '').slice(0, 20),
-      source_id: OMEGA_ID,
-      source_type: OMEGA_TYPE,
-      source_team_id: OMEGA_TEAM_ID,
-      destination_id: id,
-      destination_type: type,
-      destination_team_id: teamId,
-      creation_date: new Date().toISOString(),
-      message_status: 'type',
-      message_type: 'text',
-      message: [],
+    const sendTypingReceipt = async () => {
+      const typingMsg: ThriveMessage = {
+        id: crypto.randomUUID().replace(/-/g, '').slice(0, 20),
+        source_id: OMEGA_ID,
+        source_type: OMEGA_TYPE,
+        source_team_id: OMEGA_TEAM_ID,
+        destination_id: id,
+        destination_type: type,
+        destination_team_id: teamId,
+        creation_date: new Date().toISOString(),
+        message_status: 'type',
+        message_type: 'text',
+        message: [],
+      };
+
+      await this.invokeFunction({
+        operation: 'receipt',
+        sender: 'Omega',
+        message: JSON.stringify(typingMsg)
+          .replaceAll("'", '~~')
+          .replaceAll('"', "'"),
+        userId: this.cfg.omegaUserId,
+        sessionId: this.cfg.omegaSessionId,
+        identifier: OMEGA_ID,
+        identifierType: OMEGA_TYPE,
+        identifierTeamId: OMEGA_TEAM_ID,
+      });
     };
 
-    await this.invokeFunction({
-      operation: 'receipt',
-      sender: 'Omega',
-      message: JSON.stringify(typingMsg)
-        .replaceAll("'", '~~')
-        .replaceAll('"', "'"),
-      userId: this.cfg.omegaUserId,
-      sessionId: this.cfg.omegaSessionId,
-      identifier: OMEGA_ID,
-      identifierType: OMEGA_TYPE,
-      identifierTeamId: OMEGA_TEAM_ID,
-    });
+    // Fire immediately, then repeat every 3 seconds while agent is processing
+    await sendTypingReceipt();
+    const timer = setInterval(() => {
+      sendTypingReceipt().catch((err) =>
+        logger.warn({ err }, 'Thrive: typing receipt interval failed'),
+      );
+    }, 3000);
+    this.typingTimers.set(jid, timer);
   }
 
   /**
