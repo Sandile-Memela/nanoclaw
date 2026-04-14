@@ -396,13 +396,6 @@ export class ThriveChannel implements Channel {
    * jid format: "identifier-identifierType-identifierTeamId@thrive"
    */
   async sendMessage(jid: string, text: string): Promise<void> {
-    // Cancel any active typing indicator before sending the reply
-    const timer = this.typingTimers.get(jid);
-    if (timer) {
-      clearInterval(timer);
-      this.typingTimers.delete(jid);
-    }
-
     const { id, type, teamId } = fromJid(jid);
 
     const thriveMsg: ThriveMessage = {
@@ -434,6 +427,13 @@ export class ThriveChannel implements Channel {
     };
 
     await this.invokeFunction(payload);
+
+    // Cancel the typing indicator only once the message lands successfully
+    const timer = this.typingTimers.get(jid);
+    if (timer) {
+      clearInterval(timer);
+      this.typingTimers.delete(jid);
+    }
   }
 
   /**
@@ -483,28 +483,49 @@ export class ThriveChannel implements Channel {
   private async invokeFunction(
     payload: AppwriteFunctionPayload,
   ): Promise<void> {
-    try {
-      const client = new Client()
-        .setEndpoint(this.cfg.appwriteEndpoint)
-        .setProject(this.cfg.appwriteProjectId)
-        .setKey(this.cfg.appwriteApiKey);
+    const MAX_ATTEMPTS = 3;
+    const RETRY_DELAY_MS = 2000;
 
-      const functions = new Functions(client);
-      await functions.createExecution(
-        this.cfg.appwriteFunctionId,
-        JSON.stringify(payload),
-        false, // synchronous
-      );
-      logger.debug(
-        { operation: payload.operation, destination: payload.identifier },
-        'Thrive: function invoked',
-      );
-    } catch (err) {
-      logger.error(
-        { err, operation: payload.operation },
-        'Thrive: Appwrite function invocation failed',
-      );
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const client = new Client()
+          .setEndpoint(this.cfg.appwriteEndpoint)
+          .setProject(this.cfg.appwriteProjectId)
+          .setKey(this.cfg.appwriteApiKey);
+
+        const functions = new Functions(client);
+        await functions.createExecution(
+          this.cfg.appwriteFunctionId,
+          JSON.stringify(payload),
+          false, // synchronous
+        );
+        logger.debug(
+          {
+            operation: payload.operation,
+            destination: payload.identifier,
+            attempt,
+          },
+          'Thrive: function invoked',
+        );
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < MAX_ATTEMPTS) {
+          logger.warn(
+            { err, operation: payload.operation, attempt },
+            `Thrive: function invocation failed — retrying in ${RETRY_DELAY_MS}ms`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        }
+      }
     }
+
+    logger.error(
+      { err: lastErr, operation: payload.operation },
+      `Thrive: function invocation failed after ${MAX_ATTEMPTS} attempts`,
+    );
+    throw lastErr;
   }
 
   isConnected(): boolean {
