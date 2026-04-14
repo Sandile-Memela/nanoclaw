@@ -520,17 +520,10 @@ export class ThriveChannel implements Channel {
       identifierTeamId: OMEGA_TEAM_ID,
     };
 
-    try {
-      await this.invokeFunction(payload);
-    } catch (err) {
-      // All retries exhausted — stop the typing indicator so it doesn't run
-      // forever, then re-throw so the caller knows the send failed.
-      this.clearTypingTimer(jid);
-      throw err;
-    }
-
-    // Cancel the typing indicator only once the message lands successfully
+    // Clear the timer synchronously before awaiting, so the interval cannot
+    // fire during the yield and queue a typing receipt after the message.
     this.clearTypingTimer(jid);
+    await this.invokeFunction(payload);
   }
 
   /**
