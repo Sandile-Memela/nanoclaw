@@ -328,6 +328,45 @@ export class ThriveChannel implements Channel {
     };
 
     this.opts.onMessage(jid, newMessage);
+
+    // Fire-and-forget delivery receipt back to the sender
+    this.sendDeliveryReceipt(msg).catch((err) =>
+      logger.warn({ err, id: msg.id }, 'Thrive: delivery receipt failed'),
+    );
+  }
+
+  /**
+   * Send a "deliver" receipt to the original sender to confirm NanoClaw
+   * received their message. Mirrors the iOS client's delivery receipt pattern:
+   * source/destination are swapped, id gets "dld" suffix, message is [original id].
+   */
+  private async sendDeliveryReceipt(msg: ThriveMessage): Promise<void> {
+    const receiptMsg: ThriveMessage = {
+      id: msg.id + 'dld',
+      source_id: OMEGA_ID,
+      source_type: OMEGA_TYPE,
+      source_team_id: OMEGA_TEAM_ID,
+      destination_id: msg.source_id,
+      destination_type: msg.source_type,
+      destination_team_id: msg.source_team_id,
+      creation_date: new Date().toISOString(),
+      message_status: 'deliver',
+      message_type: 'text',
+      message: [msg.id],
+    };
+
+    await this.invokeFunction({
+      operation: 'receipt',
+      sender: 'Omega',
+      message: JSON.stringify(receiptMsg)
+        .replaceAll("'", '~~')
+        .replaceAll('"', "'"),
+      userId: this.cfg.omegaUserId,
+      sessionId: this.cfg.omegaSessionId,
+      identifier: OMEGA_ID,
+      identifierType: OMEGA_TYPE,
+      identifierTeamId: OMEGA_TEAM_ID,
+    });
   }
 
   /**
