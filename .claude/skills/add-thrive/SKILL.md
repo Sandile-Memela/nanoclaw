@@ -141,8 +141,8 @@ tail -f logs/nanoclaw.log | grep -i thrive
 
 - **Inbound** — Omega subscribes to its own RabbitMQ exchange (`omegaId-type-teamId@sessionId`). Messages arrive as `ThriveMessage` JSON. Non-text and receipt messages are filtered out before routing to the agent.
 - **Receipts** — On each inbound message: a `deliver` receipt fires immediately, followed by a `read` receipt. Both are sent back via the Appwrite RabbitMQ function.
-- **Typing indicator** — When the agent starts processing, a `type` receipt fires every 3 seconds until the reply is sent (or 5 minutes max as a safety valve).
-- **Outbound** — Replies go through the Appwrite function (`operation: receive`). If the invocation fails, it retries up to 3 times with a 2-second delay. The typing indicator only cancels once a reply succeeds.
+- **Typing indicator** — When the agent starts processing, a `type` receipt fires every 3 seconds until the reply is sent (or 5 minutes max as a safety valve). Interval failures are caught and logged as warnings rather than crashing the timer.
+- **Outbound** — Replies longer than 900 characters are split into chunks and sent sequentially. The typing timer is cancelled synchronously before the first chunk is sent (so the interval cannot fire during an async yield and queue a stale typing receipt after the message). Each chunk is sent via the Appwrite function (`operation: receive`) with `async: true` so Appwrite queues the execution immediately without waiting for it to complete. If the HTTP call to Appwrite fails, it retries up to 3 times with a 2-second delay.
 - **Auto-reconnect** — RabbitMQ disconnections trigger an automatic 5-second reconnect loop.
 - **Session ID** — `THRIVE_OMEGA_SESSION_ID` is auto-generated and appended to `.env` on first run so Thrive devices can always find Omega's exchange.
 
