@@ -1,0 +1,37 @@
+name: Deploy to k3s
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: root
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            cd /root/nanoclaw
+            git pull origin main
+            SHA=$(git rev-parse --short HEAD)
+
+            # Build and push main app image to zot registry
+            docker build -t localhost:30406/nanoclaw:$SHA -t localhost:30406/nanoclaw:latest .
+            docker push localhost:30406/nanoclaw:$SHA
+            docker push localhost:30406/nanoclaw:latest
+
+            # Build agent image in host Docker (not pushed to zot — used directly by Docker)
+            docker build -f container/Dockerfile -t nanoclaw-agent:latest container/
+
+            # Apply manifests (creates/updates Qdrant, nanoclaw-env secret, Ingress, etc.)
+            kubectl apply -f k3s/manifests.yaml
+
+            # Trigger a rolling restart so k8s pulls the new :latest image
+            kubectl rollout restart deployment/nanoclaw -n default
+            kubectl rollout status deployment/nanoclaw -n default --timeout=120s
+            kubectl rollout status deployment/qdrant -n default --timeout=120s

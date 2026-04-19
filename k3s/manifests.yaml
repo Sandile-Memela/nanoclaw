@@ -1,0 +1,182 @@
+# nanoclaw — k3s Deployment
+# WhatsApp/Claude agent that spawns Docker containers for tasks.
+# Uses hostNetwork so the credential proxy (port 3001) is reachable from Docker containers
+# via host.docker.internal. Data lives at /opt/nanoclaw on the host (hostPath volume)
+# so Docker volume mounts in spawned agent containers resolve on the host filesystem.
+#
+# dnsPolicy: ClusterFirstWithHostNet is required — without it, hostNetwork pods use the
+# host's /etc/resolv.conf and cannot resolve cluster-internal DNS (e.g. rabbitmq.rabbitmq.svc.cluster.local).
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nanoclaw-env
+  namespace: default
+type: Opaque
+stringData:
+  TZ: "Africa/Johannesburg"
+  ONECLI_URL: "http://127.0.0.1:10254"
+  ASSISTANT_NAME: "Omega"
+  RABBITMQ_URL: "amqp://globeConnect:asE5gH9o81LOk@rabbitmq.rabbitmq.svc.cluster.local:5672/"
+  THRIVE_APPWRITE_ENDPOINT: "https://appwrite.globe.computer/v1"
+  THRIVE_APPWRITE_PROJECT_ID: "676485df003b9d7e76c7"
+  THRIVE_APPWRITE_API_KEY: "standard_5eadf06de8df2826153339adb337b52d4865fb3220aea655f2888c74eada491a038301df8d173217285fd5add90a5b99372764f61d6bac26edf3df61cc69319dbc0413977fface92da084c16e5c97d4bb096a3ad868896bb0bcb0211bc22e7e301bda2c6cc21f7578f42f03f443de4c48cc51916548f250df58237020fb3e5ca"
+  THRIVE_APPWRITE_FUNCTION_ID: "67f184b10014a0e266e0"
+  THRIVE_OMEGA_USER_ID: ""
+  THRIVE_OMEGA_SESSION_ID: "be270add39ef4dffab89"
+  CLAUDE_CODE_OAUTH_TOKEN: "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"
+  QDRANT_URL: "http://qdrant.default.svc.cluster.local:6333"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nanoclaw
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nanoclaw
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: nanoclaw
+    spec:
+      # hostNetwork: pod shares host network namespace so the credential proxy
+      # (bound to docker0 / 0.0.0.0:3001) is reachable from Docker containers via
+      # host.docker.internal — same as when nanoclaw ran as a bare process.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      enableServiceLinks: false
+      containers:
+        - name: nanoclaw
+          image: 102.209.85.138:5000/nanoclaw:latest
+          envFrom:
+            - secretRef:
+                name: nanoclaw-env
+          volumeMounts:
+            - name: nanoclaw-data
+              mountPath: /opt/nanoclaw
+            - name: docker-socket
+              mountPath: /var/run/docker.sock
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+      volumes:
+        - name: nanoclaw-data
+          hostPath:
+            path: /opt/nanoclaw
+            type: DirectoryOrCreate
+        - name: docker-socket
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+
+---
+# Qdrant — vector database for long-term agent memory
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-data
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qdrant
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qdrant
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: qdrant
+    spec:
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:latest
+          ports:
+            - containerPort: 6333
+              name: http
+            - containerPort: 6334
+              name: grpc
+          volumeMounts:
+            - name: qdrant-data
+              mountPath: /qdrant/storage
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 6333
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: qdrant-data
+          persistentVolumeClaim:
+            claimName: qdrant-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: default
+spec:
+  type: NodePort
+  selector:
+    app: qdrant
+  ports:
+    - name: http
+      port: 6333
+      targetPort: 6333
+      nodePort: 30633
+    - name: grpc
+      port: 6334
+      targetPort: 6334
+
+---
+# Expose Qdrant web UI at qdrant.globe.computer
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: qdrant
+  namespace: default
+spec:
+  rules:
+    - host: qdrant.globe.computer
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: qdrant
+                port:
+                  number: 6333

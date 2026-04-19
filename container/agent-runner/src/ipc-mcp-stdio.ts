@@ -15,6 +15,42 @@ const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 
+// Qdrant long-term memory
+const QDRANT_URL = process.env.QDRANT_URL ?? 'http://host.docker.internal:6333';
+const QDRANT_COLLECTION = 'nanoclaw_memories';
+
+async function qdrantFetch(method: string, endpoint: string, body?: unknown): Promise<Response> {
+  return fetch(`${QDRANT_URL}${endpoint}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+}
+
+let collectionReady = false;
+
+async function ensureCollection(): Promise<void> {
+  if (collectionReady) return;
+
+  const check = await qdrantFetch('GET', `/collections/${QDRANT_COLLECTION}`);
+  if (check.status === 404) {
+    await qdrantFetch('PUT', `/collections/${QDRANT_COLLECTION}`, {
+      vectors: { size: 1, distance: 'Dot' },
+    });
+    // Full-text index for keyword recall
+    await qdrantFetch('PUT', `/collections/${QDRANT_COLLECTION}/index`, {
+      field_name: 'text',
+      field_schema: { type: 'text', tokenizer: 'word' },
+    });
+    // Keyword index for group-scoped filtering
+    await qdrantFetch('PUT', `/collections/${QDRANT_COLLECTION}/index`, {
+      field_name: 'groupFolder',
+      field_schema: 'keyword',
+    });
+  }
+  collectionReady = true;
+}
+
 // Context from environment variables (set by the agent runner)
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
@@ -500,6 +536,139 @@ Use available_groups.json to find the JID for a group. The folder name must be c
         },
       ],
     };
+  },
+);
+
+server.tool(
+  'remember',
+  'Store a memory for long-term recall. Use this to save facts, preferences, decisions, context, or anything worth remembering across sessions.',
+  {
+    text: z.string().describe('The memory to store — be specific and self-contained so it is useful out of context'),
+    tags: z.array(z.string()).optional().describe('Optional tags for categorisation (e.g. ["preference", "project-x"])'),
+  },
+  async (args) => {
+    try {
+      await ensureCollection();
+
+      const id = crypto.randomUUID();
+      const res = await qdrantFetch('PUT', `/collections/${QDRANT_COLLECTION}/points`, {
+        points: [{
+          id,
+          vector: [0.0],
+          payload: {
+            text: args.text,
+            tags: args.tags ?? [],
+            groupFolder,
+            timestamp: new Date().toISOString(),
+          },
+        }],
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        return { content: [{ type: 'text' as const, text: `Failed to store memory: ${err}` }], isError: true };
+      }
+
+      return { content: [{ type: 'text' as const, text: `Memory stored (id: ${id})` }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'recall',
+  'Search long-term memory for relevant facts, preferences, or context. Use before answering questions that might benefit from past knowledge.',
+  {
+    query: z.string().describe('Keywords or phrase to search for'),
+    limit: z.number().optional().describe('Max results to return (default 10)'),
+    all_groups: z.boolean().optional().describe('(Main group only) Search memories from all groups'),
+  },
+  async (args) => {
+    try {
+      await ensureCollection();
+
+      const limit = args.limit ?? 10;
+      const groupFilter = (!isMain || !args.all_groups)
+        ? { key: 'groupFolder', match: { value: groupFolder } }
+        : null;
+
+      const filter: Record<string, unknown> = {
+        must: [
+          { key: 'text', match: { text: args.query } },
+          ...(groupFilter ? [groupFilter] : []),
+        ],
+      };
+
+      const res = await qdrantFetch('POST', `/collections/${QDRANT_COLLECTION}/points/scroll`, {
+        filter,
+        limit,
+        with_payload: true,
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        return { content: [{ type: 'text' as const, text: `Failed to recall memories: ${err}` }], isError: true };
+      }
+
+      const data = await res.json() as { result: { points: Array<{ id: string; payload: { text: string; timestamp: string; tags: string[]; groupFolder: string } }> } };
+      const points = data.result?.points ?? [];
+
+      if (points.length === 0) {
+        return { content: [{ type: 'text' as const, text: 'No memories found.' }] };
+      }
+
+      const formatted = points.map((p) => {
+        const { text, timestamp, tags, groupFolder: gf } = p.payload;
+        const tagStr = tags?.length ? ` [${tags.join(', ')}]` : '';
+        const groupStr = isMain && args.all_groups ? ` (${gf})` : '';
+        return `• [${p.id}] ${text}${tagStr}${groupStr}\n  ${new Date(timestamp).toLocaleString()}`;
+      }).join('\n\n');
+
+      return { content: [{ type: 'text' as const, text: formatted }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'forget',
+  'Delete a stored memory by its ID. Use when a memory is outdated or incorrect.',
+  {
+    memory_id: z.string().describe('The memory ID to delete (from recall results)'),
+  },
+  async (args) => {
+    try {
+      await ensureCollection();
+
+      // Fetch the point first to verify group ownership
+      const fetchRes = await qdrantFetch('POST', `/collections/${QDRANT_COLLECTION}/points`, {
+        ids: [args.memory_id],
+        with_payload: true,
+      });
+
+      if (fetchRes.ok) {
+        const data = await fetchRes.json() as { result: Array<{ payload: { groupFolder: string } }> };
+        const point = data.result?.[0];
+        if (point && point.payload.groupFolder !== groupFolder && !isMain) {
+          return { content: [{ type: 'text' as const, text: 'Cannot delete memories from other groups.' }], isError: true };
+        }
+      }
+
+      const res = await qdrantFetch('POST', `/collections/${QDRANT_COLLECTION}/points/delete`, {
+        points: [args.memory_id],
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        return { content: [{ type: 'text' as const, text: `Failed to delete memory: ${err}` }], isError: true };
+      }
+
+      return { content: [{ type: 'text' as const, text: `Memory ${args.memory_id} deleted.` }] };
+    } catch (err) {
+      return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+    }
   },
 );
 

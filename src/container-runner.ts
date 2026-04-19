@@ -267,6 +267,9 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
+  // Qdrant long-term memory — NodePort 30633 is reachable via host gateway on both macOS and Linux
+  args.push('-e', `QDRANT_URL=http://${CONTAINER_HOST_GATEWAY}:30633`);
+
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
